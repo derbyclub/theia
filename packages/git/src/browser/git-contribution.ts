@@ -21,15 +21,11 @@ import {
     CommandRegistry,
     DisposableCollection,
     Emitter,
-    Event,
-    MenuContribution,
+    Event, MenuContribution,
     MenuModelRegistry
 } from '@theia/core';
 import {
-    AbstractViewContribution,
     DiffUris,
-    FrontendApplication,
-    FrontendApplicationContribution,
     LabelProvider,
     StatusBar,
     StatusBarEntry,
@@ -44,7 +40,7 @@ import {
     EditorWidget
 } from '@theia/editor/lib/browser';
 import { Git, GitFileChange, GitFileStatus, Repository, WorkingDirectoryStatus } from '../common';
-import { GitWidget } from './git-widget';
+import { GitCommands } from './git-commands';
 import { GitRepositoryTracker } from './git-repository-tracker';
 import { GitAction, GitQuickOpenService } from './git-quick-open-service';
 import { GitSyncService } from './git-sync-service';
@@ -61,7 +57,6 @@ import {
 import { GitRepositoryProvider } from './git-repository-provider';
 import { GitCommitMessageValidator } from '../browser/git-commit-message-validator';
 import { GitErrorHandler } from '../browser/git-error-handler';
-import { GIT_RESOURCE_SCHEME } from './git-resource';
 import {
     ScmTitleCommandsContribution,
     ScmTitleCommandRegistry
@@ -75,6 +70,7 @@ import {
     ScmGroupCommandContribution,
     ScmGroupCommandRegistry
 } from '@theia/scm/lib/browser/scm-group-command-registry';
+import { GitDecorator } from './git-decorator';
 
 export const GIT_WIDGET_FACTORY_ID = 'git';
 
@@ -114,15 +110,15 @@ export namespace GIT_COMMANDS {
         label: 'Git: Checkout'
     };
     export const COMMIT = {
-        id: 'git_scm_commit',
+        id: 'git.commit.all',
         tooltip: 'Commit all the staged changes',
         text: 'Commit',
-        command: 'commit'
     };
     export const COMMIT_ADD_SIGN_OFF = {
         id: 'git-commit-add-sign-off',
         label: 'Add Signed-off-by',
-        iconClass: 'fa fa-pencil-square-o '
+        iconClass: 'fa fa-pencil-square-o',
+        category: 'navigation'
     };
     export const COMMIT_AMEND = {
         id: 'git.commit.amend'
@@ -139,6 +135,12 @@ export namespace GIT_COMMANDS {
         category: 'Git',
         label: 'Open File'
     };
+    export const OPEN_CHANGED_FILE: Command = {
+        id: 'git.open.changed.file',
+        category: 'Git',
+        label: 'Open File',
+        iconClass: 'open-file'
+    };
     export const OPEN_CHANGES: Command = {
         id: 'git.open.changes',
         category: 'Git',
@@ -152,27 +154,46 @@ export namespace GIT_COMMANDS {
         id: 'git.publish',
         label: 'Git: Publish Branch'
     };
+    export const STAGE = {
+        id: 'git.stage',
+        label: 'Stage Changes',
+        iconClass: 'fa fa-plus'
+    };
     export const STAGE_ALL = {
         id: 'git.stage.all',
         label: 'Stage All Changes',
         iconClass: 'fa fa-plus'
     };
+    export const UNSTAGE = {
+        id: 'git.unstage',
+        iconClass: 'fa fa-minus',
+        label: 'Unstage Changes'
+    };
     export const UNSTAGE_ALL = {
-        id: 'git.unstage.all'
+        id: 'git.unstage.all',
+        iconClass: 'fa fa-minus',
+        label: 'Unstage All'
+    };
+    export const DISCARD = {
+        id: 'git.discard',
+        iconClass: 'fa fa-undo',
+        label: 'Discard Changes'
     };
     export const DISCARD_ALL = {
-        id: 'git.discard.all'
+        id: 'git.discard.all',
+        iconClass: 'fa fa-undo',
+        label: 'Discard All Changes'
     };
     export const REFRESH = {
         id: 'git-refresh',
         label: 'Refresh',
-        iconClass: 'fa fa-refresh'
+        iconClass: 'fa fa-refresh',
+        category: 'navigation'
     };
 }
 
 @injectable()
-export class GitViewContribution extends AbstractViewContribution<GitWidget>
-    implements FrontendApplicationContribution,
+export class GitContribution implements
         CommandContribution,
         MenuContribution,
         TabBarToolbarContribution,
@@ -189,8 +210,6 @@ export class GitViewContribution extends AbstractViewContribution<GitWidget>
 
     private dirtyRepositories: Repository[] = [];
     private scmProviders: ScmProvider[] = [];
-    private stagedChanges: GitFileChange[] = [];
-    private mergeChanges: GitFileChange[] = [];
 
     @inject(StatusBar) protected readonly statusBar: StatusBar;
     @inject(EditorManager) protected readonly editorManager: EditorManager;
@@ -207,23 +226,7 @@ export class GitViewContribution extends AbstractViewContribution<GitWidget>
     @inject(GitErrorHandler)protected readonly gitErrorHandler: GitErrorHandler;
     @inject(LabelProvider) protected readonly labelProvider: LabelProvider;
     @inject(ScmWidget) protected readonly scmWidget: ScmWidget;
-
-    constructor() {
-        super({
-            widgetId: GIT_WIDGET_FACTORY_ID,
-            widgetName: 'Git',
-            defaultWidgetOptions: {
-                area: 'left',
-                rank: 200
-            },
-            toggleCommandId: 'gitView:toggle',
-            toggleKeybinding: 'ctrlcmd+shift+g'
-        });
-    }
-
-    async initializeLayout(app: FrontendApplication): Promise<void> {
-        await this.openView();
-    }
+    @inject(GitCommands) protected readonly gitCommands: GitCommands;
 
     onStart(): void {
         this.repositoryProvider.allRepositories.forEach(repository => this.registerScmProvider(repository));
@@ -233,8 +236,8 @@ export class GitViewContribution extends AbstractViewContribution<GitWidget>
             if (repository) {
                 this.repositoryProvider.selectedRepository = repository;
             } else {
-                this.statusBar.removeElement(GitViewContribution.GIT_REPOSITORY_STATUS);
-                this.statusBar.removeElement(GitViewContribution.GIT_SYNC_STATUS);
+                this.statusBar.removeElement(GitContribution.GIT_REPOSITORY_STATUS);
+                this.statusBar.removeElement(GitContribution.GIT_SYNC_STATUS);
             }
         });
         this.repositoryTracker.onGitEvent(event => {
@@ -306,8 +309,6 @@ export class GitViewContribution extends AbstractViewContribution<GitWidget>
         if (mergeChanges.length > 0) {
             groups.push(await this.getGroup('Merged Changes', provider, mergeChanges));
         }
-        this.stagedChanges = stagedChanges;
-        this.mergeChanges = mergeChanges;
         return groups;
     }
 
@@ -316,14 +317,18 @@ export class GitViewContribution extends AbstractViewContribution<GitWidget>
             const icon = await this.labelProvider.getIcon(new URI(change.uri));
             const resource: ScmResource = {
                 sourceUri: new URI(change.uri),
-                decorations: {icon, letter: GitFileStatus.toAbbreviation(change.status, change.staged), color: this.getColor(change.status)},
+                decorations: {
+                    icon,
+                    letter: GitFileStatus.toAbbreviation(change.status, change.staged),
+                    color: GitDecorator.getDecorationColor(change.status)
+                },
                 async open(): Promise<void> {
                     open();
                 }
             };
             const open = () => {
-                const uriToOpen = this.getUriToOpen(change);
-                this.editorManager.open(uriToOpen, {mode: 'activate'});
+                const uriToOpen = this.gitCommands.getUriToOpen(change);
+                this.editorManager.open(uriToOpen, { mode: 'activate' });
             };
             return resource;
         }));
@@ -332,58 +337,11 @@ export class GitViewContribution extends AbstractViewContribution<GitWidget>
         return {
             label,
             hideWhenEmpty: false,
-            id: `${label}_${GitViewContribution.SCM_GROUP_ID ++}`,
+            id: `${label}_${GitContribution.SCM_GROUP_ID ++}`,
             provider,
             onDidChange: provider.onDidChange,
             resources: scmResources.sort(sort)
         };
-    }
-
-    private getUriToOpen(change: GitFileChange): URI {
-        const changeUri: URI = new URI(change.uri);
-        if (change.status !== GitFileStatus.New) {
-            if (change.staged) {
-                return DiffUris.encode(
-                    changeUri.withScheme(GIT_RESOURCE_SCHEME).withQuery('HEAD'),
-                    changeUri.withScheme(GIT_RESOURCE_SCHEME),
-                    changeUri.displayName + ' (Index)');
-            }
-            if (this.stagedChanges.find(c => c.uri === change.uri)) {
-                return DiffUris.encode(
-                    changeUri.withScheme(GIT_RESOURCE_SCHEME),
-                    changeUri,
-                    changeUri.displayName + ' (Working tree)');
-            }
-            if (this.mergeChanges.find(c => c.uri === change.uri)) {
-                return changeUri;
-            }
-            return DiffUris.encode(
-                changeUri.withScheme(GIT_RESOURCE_SCHEME).withQuery('HEAD'),
-                changeUri,
-                changeUri.displayName + ' (Working tree)');
-        }
-        if (change.staged) {
-            return changeUri.withScheme(GIT_RESOURCE_SCHEME);
-        }
-        if (this.stagedChanges.find(c => c.uri === change.uri)) {
-            return DiffUris.encode(
-                changeUri.withScheme(GIT_RESOURCE_SCHEME),
-                changeUri,
-                changeUri.displayName + ' (Working tree)');
-        }
-        return changeUri;
-    }
-
-    private getColor(status: GitFileStatus): string {
-        if (status === GitFileStatus.New) {
-            return 'var(--theia-success-color0)';
-        } else if (status === GitFileStatus.Deleted) {
-            return 'var(--theia-warn-color0)';
-        } else if (status === GitFileStatus.Conflicted) {
-            return 'var(--theia-error-color0)';
-        } else {
-            return 'var(--theia-brand-color0)';
-        }
     }
 
     /** Detect and handle added or removed repositories. */
@@ -432,42 +390,30 @@ export class GitViewContribution extends AbstractViewContribution<GitWidget>
         return repo;
     }
 
-    private async doCommit(repository: Repository, message: string, options?: 'amend' | 'sign-off') {
-        try {
-            // We can make sure, repository exists, otherwise we would not have this button.
-            const signOff = options === 'sign-off';
-            const amend = options === 'amend';
-            await this.git.commit(repository, message, { signOff, amend });
-        } catch (error) {
-            this.gitErrorHandler.handleError(error);
-        }
-    }
-
     registerMenus(menus: MenuModelRegistry): void {
-        super.registerMenus(menus);
         [GIT_COMMANDS.FETCH, GIT_COMMANDS.PULL_DEFAULT, GIT_COMMANDS.PULL, GIT_COMMANDS.PUSH_DEFAULT, GIT_COMMANDS.PUSH, GIT_COMMANDS.MERGE].forEach(command =>
-            menus.registerMenuAction(GitWidget.ContextMenu.OTHER_GROUP, {
+            menus.registerMenuAction(ScmWidget.ContextMenu.OTHER_GROUP, {
                 commandId: command.id,
                 label: command.label.slice('Git: '.length)
             })
         );
-        menus.registerMenuAction(GitWidget.ContextMenu.COMMIT_GROUP, {
+        menus.registerMenuAction(ScmWidget.ContextMenu.INPUT_GROUP, {
             commandId: GIT_COMMANDS.COMMIT_AMEND.id,
             label: 'Commit (Amend)'
         });
-        menus.registerMenuAction(GitWidget.ContextMenu.COMMIT_GROUP, {
+        menus.registerMenuAction(ScmWidget.ContextMenu.INPUT_GROUP, {
             commandId: GIT_COMMANDS.COMMIT_SIGN_OFF.id,
             label: 'Commit (Signed Off)'
         });
-        menus.registerMenuAction(GitWidget.ContextMenu.BATCH, {
+        menus.registerMenuAction(ScmWidget.ContextMenu.BATCH, {
             commandId: GIT_COMMANDS.STAGE_ALL.id,
             label: 'Stage All Changes'
         });
-        menus.registerMenuAction(GitWidget.ContextMenu.BATCH, {
+        menus.registerMenuAction(ScmWidget.ContextMenu.BATCH, {
             commandId: GIT_COMMANDS.UNSTAGE_ALL.id,
             label: 'Unstage All Changes'
         });
-        menus.registerMenuAction(GitWidget.ContextMenu.BATCH, {
+        menus.registerMenuAction(ScmWidget.ContextMenu.BATCH, {
             commandId: GIT_COMMANDS.DISCARD_ALL.id,
             label: 'Discard All Changes'
         });
@@ -480,7 +426,6 @@ export class GitViewContribution extends AbstractViewContribution<GitWidget>
     }
 
     registerCommands(registry: CommandRegistry): void {
-        super.registerCommands(registry);
         registry.registerCommand(GIT_COMMANDS.FETCH, {
             execute: () => this.quickOpenService.fetch(),
             isEnabled: () => !!this.repositoryTracker.selectedRepository
@@ -510,17 +455,16 @@ export class GitViewContribution extends AbstractViewContribution<GitWidget>
             isEnabled: () => !!this.repositoryTracker.selectedRepository
         });
         registry.registerCommand(GIT_COMMANDS.COMMIT_SIGN_OFF, {
-            execute: () => this.tryGetWidget()!.doCommit(this.repositoryTracker.selectedRepository, 'sign-off'),
-            isEnabled: () => !!this.tryGetWidget() && !!this.repositoryTracker.selectedRepository
+            execute: () => this.gitCommands.doCommit(this.repositoryTracker.selectedRepository, 'sign-off'),
+            isEnabled: () => !!this.repositoryTracker.selectedRepository
         });
         registry.registerCommand(GIT_COMMANDS.COMMIT_AMEND, {
             execute: async () => {
-                const widget = this.tryGetWidget();
                 const { selectedRepository } = this.repositoryTracker;
-                if (!!widget && !!selectedRepository) {
+                if (!!selectedRepository) {
                     try {
                         const message = await this.quickOpenService.commitMessageForAmend();
-                        widget.doCommit(selectedRepository, 'amend', message);
+                        this.gitCommands.doCommit(selectedRepository, 'amend', message);
                     } catch (e) {
                         if (!(e instanceof Error) || e.message !== 'User abort.') {
                             throw e;
@@ -528,32 +472,23 @@ export class GitViewContribution extends AbstractViewContribution<GitWidget>
                     }
                 }
             },
-            isEnabled: () => !!this.tryGetWidget() && !!this.repositoryTracker.selectedRepository
+            isEnabled: () => !!this.repositoryTracker.selectedRepository
         });
         registry.registerCommand(GIT_COMMANDS.STAGE_ALL, {
             execute: async () => {
-                const widget = this.tryGetWidget();
-                if (!!widget) {
-                    widget.stageAll();
-                }
+                this.gitCommands.stageAll();
             },
             isEnabled: () => !!this.repositoryTracker.selectedRepository
         });
         registry.registerCommand(GIT_COMMANDS.UNSTAGE_ALL, {
             execute: async () => {
-                const widget = this.tryGetWidget();
-                if (!!widget) {
-                    widget.unstageAll();
-                }
+                this.gitCommands.unstageAll();
             },
             isEnabled: () => !!this.repositoryTracker.selectedRepository
         });
         registry.registerCommand(GIT_COMMANDS.DISCARD_ALL, {
             execute: async () => {
-                const widget = this.tryGetWidget();
-                if (!!widget) {
-                    widget.discardAll();
-                }
+                this.gitCommands.discardAll();
             },
             isEnabled: () => !!this.repositoryTracker.selectedRepository
         });
@@ -597,7 +532,7 @@ export class GitViewContribution extends AbstractViewContribution<GitWidget>
         const commit = (scmRepository: ScmRepository, message: string) => {
             const localUri = scmRepository.provider.rootUri;
             if (localUri) {
-                this.doCommit({ localUri }, message);
+                this.gitCommands.doCommit({ localUri }, undefined, message);
             }
         };
         registry.registerCommand(GIT_COMMANDS.COMMIT,
@@ -618,16 +553,85 @@ export class GitViewContribution extends AbstractViewContribution<GitWidget>
                 refresh();
             }
         });
-        const signOff = () => this.doSignOff();
-        this.commandRegistry.registerCommand({id: 'git-commit-add-sign-off', label: 'Add Signed-off-by', iconClass: 'fa fa-pencil-square-o '}, {
-            execute() {
-                signOff();
+        const doSignOff = async () => {
+            const { selectedRepository } = this.repositoryProvider;
+            if (selectedRepository) {
+                const [username, email] = await this.gitCommands.getUserConfig(selectedRepository);
+                const signOff = `\n\nSigned-off-by: ${username} <${email}>`;
+                const commitTextArea = document.getElementById(ScmWidget.Styles.INPUT_MESSAGE) as HTMLTextAreaElement;
+                if (commitTextArea) {
+                    const content = commitTextArea.value;
+                    if (content.endsWith(signOff)) {
+                        commitTextArea.value = content.substr(0, content.length - signOff.length);
+                    } else {
+                        commitTextArea.value = `${content}${signOff}`;
+                    }
+                    this.scmWidget.resize(commitTextArea);
+                    commitTextArea.focus();
+                }
             }
-        });
+        };
         registry.registerCommand(GIT_COMMANDS.COMMIT_ADD_SIGN_OFF, {
             // tslint:disable-next-line:no-any
             execute(...args): any {
-                signOff();
+                doSignOff();
+            }
+        });
+        const unstage = async (uri: string) => {
+            const repository = this.repositoryProvider.selectedRepository;
+            if (repository) {
+                const status = await this.git.status(repository);
+                const gitChange = status.changes.find(change => change.uri === uri);
+                if (gitChange) {
+                    this.gitCommands.unstage(repository, gitChange);
+                }
+            }
+        };
+        registry.registerCommand(GIT_COMMANDS.UNSTAGE, {
+            // tslint:disable-next-line:no-any
+            execute(...args): any {
+                unstage(args[0]);
+            }
+        });
+        const stage = async (uri: string) => {
+            const repository = this.repositoryProvider.selectedRepository;
+            if (repository) {
+                const status = await this.git.status(repository);
+                const gitChange = status.changes.find(change => change.uri === uri);
+                if (gitChange) {
+                    this.gitCommands.stage(repository, gitChange);
+                }
+            }
+        };
+        registry.registerCommand(GIT_COMMANDS.STAGE, {
+            // tslint:disable-next-line:no-any
+            execute(...args): any {
+                stage(args[0]);
+            }
+        });
+        const discard = async (uri: string) => {
+            const repository = this.repositoryProvider.selectedRepository;
+            if (repository) {
+                const status = await this.git.status(repository);
+                const gitChange = status.changes.find(change => change.uri === uri);
+                if (gitChange) {
+                    this.gitCommands.discard(repository, gitChange);
+                }
+            }
+        };
+        registry.registerCommand(GIT_COMMANDS.DISCARD, {
+            // tslint:disable-next-line:no-any
+            execute(...args): any {
+                discard(args[0]);
+            }
+        });
+        const open = async (uri: string) => {
+            this.gitCommands.openFile(new URI(uri));
+        };
+        registry.registerCommand(GIT_COMMANDS.OPEN_CHANGED_FILE, {
+            // tslint:disable-next-line:no-any
+            execute(...args): any {
+                open(args[0]);
             }
         });
     }
@@ -674,22 +678,17 @@ export class GitViewContribution extends AbstractViewContribution<GitWidget>
     async openChanges(widget?: Widget): Promise<EditorWidget | undefined> {
         const options = this.getOpenChangesOptions(widget);
         if (options) {
-            const view = await this.widget;
-            return view.openChange(options.change, options.options);
+            return this.gitCommands.openChange(options.change, options.options);
         }
         return undefined;
     }
 
     protected getOpenChangesOptions(widget?: Widget): GitOpenChangesOptions | undefined {
-        const view = this.tryGetWidget();
-        if (!view) {
-            return undefined;
-        }
         const ref = widget ? widget : this.editorManager.currentEditor;
         if (ref instanceof EditorWidget && !DiffUris.isDiffUri(ref.editor.uri)) {
             const uri = ref.editor.uri;
-            const change = view.findChange(uri);
-            if (change && view.getUriToOpen(change).toString() !== uri.toString()) {
+            const change = this.gitCommands.findChange(uri);
+            if (change && this.gitCommands.getUriToOpen(change).toString() !== uri.toString()) {
                 const selection = ref.editor.selection;
                 return { change, options: { selection, widgetOptions: { ref } } };
             }
@@ -714,7 +713,7 @@ export class GitViewContribution extends AbstractViewContribution<GitWidget>
                 }]);
             }
         } else {
-            this.statusBar.removeElement(GitViewContribution.GIT_SYNC_STATUS);
+            this.statusBar.removeElement(GitContribution.GIT_SYNC_STATUS);
         }
     }
     protected getStatusBarEntry(): (Pick<StatusBarEntry, 'text'> & Partial<StatusBarEntry>) | undefined {
@@ -749,36 +748,15 @@ export class GitViewContribution extends AbstractViewContribution<GitWidget>
     }
 
     registerScmResourceCommands(registry: ScmResourceCommandRegistry): void {
+        registry.registerCommands('Changes', [GIT_COMMANDS.OPEN_CHANGED_FILE.id, GIT_COMMANDS.DISCARD.id, GIT_COMMANDS.STAGE.id]);
+        registry.registerCommands('Staged changes', [GIT_COMMANDS.OPEN_CHANGED_FILE.id, GIT_COMMANDS.UNSTAGE.id]);
+        registry.registerCommands('Merged Changes', [GIT_COMMANDS.OPEN_CHANGED_FILE.id, GIT_COMMANDS.DISCARD.id, GIT_COMMANDS.STAGE.id]);
     }
 
     registerScmGroupCommands(registry: ScmGroupCommandRegistry): void {
-    }
-
-    protected async doSignOff() {
-        const { selectedRepository } = this.repositoryProvider;
-        if (selectedRepository) {
-            const [username, email] = await this.getUserConfig(selectedRepository);
-            const signOff = `\n\nSigned-off-by: ${username} <${email}>`;
-            const commitTextArea = document.getElementById(ScmWidget.Styles.INPUT_MESSAGE) as HTMLTextAreaElement;
-            if (commitTextArea) {
-                const content = commitTextArea.value;
-                if (content.endsWith(signOff)) {
-                    commitTextArea.value = content.substr(0, content.length - signOff.length);
-                } else {
-                    commitTextArea.value = `${content}${signOff}`;
-                }
-                this.scmWidget.resize(commitTextArea);
-                commitTextArea.focus();
-            }
-        }
-    }
-
-    protected async getUserConfig(repository: Repository): Promise<[string, string]> {
-        const [username, email] = (await Promise.all([
-            this.git.exec(repository, ['config', 'user.name']),
-            this.git.exec(repository, ['config', 'user.email'])
-        ])).map(result => result.stdout.trim());
-        return [username, email];
+        registry.registerCommands('Changes', [GIT_COMMANDS.DISCARD_ALL.id, GIT_COMMANDS.STAGE_ALL.id]);
+        registry.registerCommands('Staged changes', [GIT_COMMANDS.UNSTAGE_ALL.id]);
+        registry.registerCommands('Merged Changes', [GIT_COMMANDS.STAGE_ALL.id]);
     }
 }
 export interface GitOpenFileOptions {

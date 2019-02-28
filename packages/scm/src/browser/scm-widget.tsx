@@ -17,7 +17,14 @@ import { injectable, inject, postConstruct } from 'inversify';
 import { ContextMenuRenderer, ReactWidget, StatefulWidget } from '@theia/core/lib/browser';
 import * as React from 'react';
 import { AlertMessage } from '@theia/core/lib/browser/widgets/alert-message';
-import { InputValidator, ScmInput, ScmRepository, ScmResource, ScmResourceGroup, ScmService } from './scm-service';
+import {
+    InputValidator,
+    ScmInput,
+    ScmRepository,
+    ScmResource,
+    ScmResourceGroup,
+    ScmService
+} from './scm-service';
 import { CommandRegistry, MenuPath } from '@theia/core';
 import { EditorManager } from '@theia/editor/lib/browser';
 import { ScmTitleCommandRegistry } from './scm-title-command-registry';
@@ -89,7 +96,7 @@ export class ScmWidget extends ReactWidget implements StatefulWidget {
         this.inputCommandMessageValidator = input.validateInput;
         return <div className={ScmWidget.Styles.MAIN_CONTAINER}>
             <div className='headerContainer'>
-                {this.renderInputCommand(input)}
+                {this.renderInput(input)}
                 {this.renderCommandBar(repository)}
             </div>
             <ScmResourceGroupsContainer
@@ -102,7 +109,7 @@ export class ScmWidget extends ReactWidget implements StatefulWidget {
         </div>;
     }
 
-    protected renderInputCommand(input: ScmInput): React.ReactNode {
+    protected renderInput(input: ScmInput): React.ReactNode {
         const validationStatus = this.inputCommandMessageValidationResult ? this.inputCommandMessageValidationResult.type : 'idle';
         const validationMessage = this.inputCommandMessageValidationResult ? this.inputCommandMessageValidationResult.message : '';
         return <div className={ScmWidget.Styles.INPUT_MESSAGE_CONTAINER}>
@@ -158,7 +165,7 @@ export class ScmWidget extends ReactWidget implements StatefulWidget {
                 </a>
             </div>
             <div className='placeholder'/>
-            {this.renderCommand(repository)}
+            {this.renderInputCommand(repository)}
         </div>;
     }
 
@@ -176,7 +183,7 @@ export class ScmWidget extends ReactWidget implements StatefulWidget {
 
     private renderButton(commandId: string): React.ReactNode {
         const command = this.commandRegistry.getCommand(commandId);
-        if (command) {
+        if (command && command.category === 'navigation') {
             const execute = () => {
                 this.commandRegistry.executeCommand(commandId);
             };
@@ -186,7 +193,7 @@ export class ScmWidget extends ReactWidget implements StatefulWidget {
         }
     }
 
-    private renderCommand(repository: ScmRepository | undefined): React.ReactNode {
+    private renderInputCommand(repository: ScmRepository | undefined): React.ReactNode {
         if (repository && repository.provider.acceptInputCommand) {
             const command = repository.provider.acceptInputCommand;
             return <div className='buttons'>
@@ -304,7 +311,7 @@ export namespace ScmResourceItem {
         letter: string,
         color: string,
         resource: ScmResource,
-        groupId: string,
+        groupLabel: string,
         scmResourceCommandRegistry: ScmResourceCommandRegistry,
         commandRegistry: CommandRegistry,
         open: () => Promise<void>
@@ -333,7 +340,7 @@ class ScmResourceItem extends React.Component<ScmResourceItem.Props> {
     }
 
     protected renderScmItemButtons(): React.ReactNode {
-        const commands = this.props.scmResourceCommandRegistry.getCommands(this.props.groupId);
+        const commands = this.props.scmResourceCommandRegistry.getCommands(this.props.groupLabel);
         if (commands) {
             return <div className='buttons'>
                 {commands.map(command => this.renderScmItemButton(command))}
@@ -345,9 +352,9 @@ class ScmResourceItem extends React.Component<ScmResourceItem.Props> {
         const command = this.props.commandRegistry.getCommand(commandId);
         if (command) {
             const execute = () => {
-                this.props.commandRegistry.executeCommand(commandId);
+                this.props.commandRegistry.executeCommand(commandId, this.props.resource.sourceUri.toString());
             };
-            return <div className='toolbar-button'>
+            return <div className='toolbar-button' key={command.id}>
                 <a className={command.iconClass} title={command.label} onClick={execute}/>
             </div>;
         }
@@ -416,7 +423,7 @@ class ScmResourceGroupContainer extends React.Component<ScmResourceGroupContaine
     }
 
     protected renderGroupButtons(): React.ReactNode {
-        const commands = this.props.scmGroupCommandRegistry.getCommands(this.props.group.id);
+        const commands = this.props.scmGroupCommandRegistry.getCommands(this.props.group.label);
         if (commands) {
             return <div className='scm-change-list-buttons-container'>
                 {commands.map(command => this.renderGroupButton(command))}
@@ -430,7 +437,7 @@ class ScmResourceGroupContainer extends React.Component<ScmResourceGroupContaine
             const execute = () => {
                 this.props.commandRegistry.executeCommand(commandId);
             };
-            return <div className='toolbar-button'>
+            return <div className='toolbar-button' key={command.id}>
                 <a className={command.iconClass} title={command.label} onClick={execute}/>
             </div>;
         }
@@ -457,7 +464,7 @@ class ScmResourceGroupContainer extends React.Component<ScmResourceGroupContaine
                                 letter={(decorations && decorations.letter) ? decorations.letter : ''}
                                 resource={resource}
                                 open={open}
-                                groupId={this.props.group.id}
+                                groupLabel={this.props.group.label}
                                 commandRegistry={this.props.commandRegistry}
                                 scmResourceCommandRegistry={this.props.scmResourceCommandRegistry}
         />;
