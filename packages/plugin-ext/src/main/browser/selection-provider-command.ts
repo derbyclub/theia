@@ -18,13 +18,13 @@ import { Command, CommandContribution, CommandRegistry } from '@theia/core/lib/c
 import { inject, injectable } from 'inversify';
 import { UriAwareCommandHandler, UriCommandHandler } from '@theia/core/lib/common/uri-command-handler';
 import URI from '@theia/core/lib/common/uri';
+import Uri from 'vscode-uri';
 import { SelectionService } from '@theia/core';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
 
 export namespace SelectionProviderCommands {
     export const GET_SELECTED_CONTEXT: Command = {
-        id: 'workspace:selectedContext',
-        label: 'Get Selected Context'
+        id: 'theia.plugin.workspace.selectedContext'
     };
 }
 
@@ -38,14 +38,14 @@ export class SelectionProviderCommandContribution implements CommandContribution
         commands.registerCommand(SelectionProviderCommands.GET_SELECTED_CONTEXT, this.newMultiUriAwareCommandHandler({
             isEnabled: () => true,
             isVisible: () => false,
-            execute: selectedUris => {
-                const rootUris = this.workspaceService.tryGetRoots().map(root => new URI(root.uri));
-
-                return {
-                    selectedPaths: selectedUris,
-                    workspaceRoots: rootUris
-                };
-            }
+            execute: (selectedUris: URI[]) =>
+                selectedUris.map(uri => Uri.from({
+                    scheme: uri.scheme,
+                    authority: uri.authority,
+                    path: uri.path.toString(),
+                    query: uri.query,
+                    fragment: uri.fragment
+                }))
         }));
     }
 
