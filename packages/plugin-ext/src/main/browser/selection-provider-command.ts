@@ -18,9 +18,8 @@ import { Command, CommandContribution, CommandRegistry } from '@theia/core/lib/c
 import { inject, injectable } from 'inversify';
 import { UriAwareCommandHandler, UriCommandHandler } from '@theia/core/lib/common/uri-command-handler';
 import URI from '@theia/core/lib/common/uri';
-import Uri from 'vscode-uri';
 import { SelectionService } from '@theia/core';
-import { WorkspaceService } from '@theia/workspace/lib/browser';
+import { theiaUritoUriComponents } from '../../common/uri-components';
 
 export namespace SelectionProviderCommands {
     export const GET_SELECTED_CONTEXT: Command = {
@@ -32,20 +31,12 @@ export namespace SelectionProviderCommands {
 export class SelectionProviderCommandContribution implements CommandContribution {
 
     @inject(SelectionService) protected readonly selectionService: SelectionService;
-    @inject(WorkspaceService) protected readonly workspaceService: WorkspaceService;
 
     registerCommands(commands: CommandRegistry): void {
         commands.registerCommand(SelectionProviderCommands.GET_SELECTED_CONTEXT, this.newMultiUriAwareCommandHandler({
             isEnabled: () => true,
             isVisible: () => false,
-            execute: (selectedUris: URI[]) =>
-                selectedUris.map(uri => Uri.from({
-                    scheme: uri.scheme,
-                    authority: uri.authority,
-                    path: uri.path.toString(),
-                    query: uri.query,
-                    fragment: uri.fragment
-                }))
+            execute: (selectedUris: URI[]) => selectedUris.map(uri => theiaUritoUriComponents(uri))
         }));
     }
 
